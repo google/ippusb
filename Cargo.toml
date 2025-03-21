@@ -1,0 +1,23 @@
+[package]
+name = "ippusb"
+version = "0.3.0"
+authors = ["The ChromiumOS Authors"]
+edition = "2021"
+license = "BSD-3-Clause"
+
+[dependencies]
+chunked_transfer = "1"
+httparse = "1.3.4"
+hyper = { version = "0.14", features = ["http1", "server", "runtime", "tcp", "backports", "deprecated"]}
+log = "0.4"
+rusb = "0.9.4"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal"] }
+
+[dev-dependencies]
+testing_logger = "0.1"
+
+[profile.release]
+lto = true
+panic = 'abort'
+overflow-checks = true
+opt-level = 's'
