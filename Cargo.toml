@@ -1,9 +1,11 @@
 [package]
 name = "ippusb"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["The ChromiumOS Authors"]
 edition = "2021"
 license = "BSD-3-Clause"
+description = "HTTP proxy for IPP-over-USB devices"
+repository = "https://github.com/google/ippusb"
 
 [dependencies]
 chunked_transfer = "1"
