@@ -13,9 +13,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 use std::vec::Vec;
 
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use rusb::{Context, UsbContext};
 use std::sync::{Condvar, Mutex};
+use std::thread::JoinHandle;
 
 use crate::device_info::{is_ippusb_interface, IppusbDescriptor, IppusbDeviceInfo};
 use crate::error::Error;
@@ -121,6 +122,8 @@ struct InterfaceManagerState {
     active: usize,
     pending_cleanup: bool,
     next_cleanup: Instant,
+    terminate_cleanup: bool,
+    cleanup_thread: Option<JoinHandle<()>>,
 }
 
 impl InterfaceManagerState {
@@ -152,11 +155,34 @@ impl InterfaceManagerState {
         Ok(())
     }
 
+    /// Call release on all interfaces.  Return Ok if all calls succeeded, or the first Err if any
+    /// call failed.
     fn release_all(&mut self) -> Result<()> {
+        let mut res = Ok(());
         for interface in &mut self.interfaces {
-            interface.release()?;
+            res = res.and(interface.release());
         }
-        Ok(())
+        res
+    }
+}
+
+/// CleanupGuard represents the cleanup thread started by InterfaceManager.  When it is dropped,
+/// the cleanup thread will be stopped.
+struct CleanupGuard {
+    manager: InterfaceManager,
+}
+
+impl CleanupGuard {
+    pub fn new(manager: InterfaceManager) -> Self {
+        Self { manager }
+    }
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        if let Err(e) = self.manager.stop_cleanup_thread() {
+            error!("Failed to stop cleanup thread: {}", e);
+        }
     }
 }
 
@@ -202,14 +228,16 @@ impl InterfaceManager {
                 active: 0,
                 pending_cleanup: false,
                 next_cleanup: Instant::now(),
+                terminate_cleanup: false,
+                cleanup_thread: None,
             })),
         }
     }
 
     /// Start a separate thread to release interfaces.  Interfaces are released once
     /// USB_CLEANUP_TIMEOUT elapses with no activity after all interfaces are internally
-    /// returned.
-    fn start_cleanup_thread(&mut self) -> Result<std::thread::JoinHandle<()>> {
+    /// returned.  This thread will be stopped when the returned CleanupGuard is dropped.
+    fn start_cleanup_thread(&mut self) -> Result<CleanupGuard> {
         let manager = self.clone();
 
         let handle = thread::Builder::new()
@@ -230,8 +258,13 @@ impl InterfaceManager {
                     // returned.
                     state = manager
                         .interface_available
-                        .wait_while(state, |t| t.active > 0 || !t.pending_cleanup)
+                        .wait_while(state, |t| {
+                            !t.terminate_cleanup && (t.active > 0 || !t.pending_cleanup)
+                        })
                         .unwrap();
+                    if state.terminate_cleanup {
+                        break;
+                    }
 
                     // Phase 2: Wait for the cleanup time to arrive.
                     // 1. If an interface is claimed and returned during the timeout, we will
@@ -246,9 +279,14 @@ impl InterfaceManager {
                         let wait = state.next_cleanup - Instant::now();
                         let result = manager
                             .interface_available
-                            .wait_timeout_while(state, wait, |t| t.active == 0)
+                            .wait_timeout_while(state, wait, |t| {
+                                !t.terminate_cleanup && t.active == 0
+                            })
                             .unwrap();
                         state = result.0; // Throw away the timed out part of the result.
+                        if state.terminate_cleanup {
+                            break 'outer;
+                        }
                         if state.active > 0 {
                             continue 'outer;
                         }
@@ -285,10 +323,46 @@ impl InterfaceManager {
                     };
                     state.pending_cleanup = false;
                 }
+
+                trace!("Cleanup thread terminating");
             })
             .map_err(Error::CleanupThread)?;
 
-        Ok(handle)
+        trace!("Cleanup thread {:?} started", handle.thread().id());
+        let mut state = self.state.lock().unwrap();
+        state.cleanup_thread = Some(handle);
+        Ok(CleanupGuard::new(self.clone()))
+    }
+
+    /// Stop the cleanup thread if it was previously started by `start_cleanup_thread`.  After
+    /// stopping the thread, attempt to release all interfaces.
+    fn stop_cleanup_thread(&mut self) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.terminate_cleanup = true;
+        let cleanup_thread = state.cleanup_thread.take();
+        self.interface_available.notify_all();
+        drop(state); // Release the lock so the cleanup thread can make progress.
+        if let Some(handle) = cleanup_thread {
+            let tid = handle.thread().id();
+            handle.join().map_err(|_| {
+                Error::CleanupThread(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Failed to join cleanup thread",
+                ))
+            })?;
+            trace!("Cleanup thread {:?} exited", tid);
+        }
+        // The thread is guaranteed to be done, so release all the interfaces.  This may produce
+        // errors if the device has been unplugged or gets shut down when interfaces have already
+        // been released; no need to log these cases.
+        match self.state.lock().unwrap().release_all() {
+            Ok(_) => {}
+            Err(Error::ReleaseInterface(_, rusb::Error::NoDevice)) => {}
+            Err(Error::ReleaseInterface(_, rusb::Error::NotFound)) => {}
+            Err(e) => error!("Failed to release interfaces: {}", e),
+        }
+
+        Ok(())
     }
 
     /// Get an interface from the pool of tracked interfaces.
@@ -346,6 +420,7 @@ pub struct Device {
     verbose_log: bool,
     handle: Arc<rusb::DeviceHandle<Context>>,
     manager: InterfaceManager,
+    _cleanup: Arc<CleanupGuard>,
 }
 
 impl Device {
@@ -382,12 +457,13 @@ impl Device {
         }
 
         let mut manager = InterfaceManager::new(handle.clone(), info.config, connections);
-        manager.start_cleanup_thread()?;
+        let cleanup_thread = manager.start_cleanup_thread()?;
 
         Ok(Device {
             verbose_log,
             handle,
             manager,
+            _cleanup: cleanup_thread.into(),
         })
     }
 
