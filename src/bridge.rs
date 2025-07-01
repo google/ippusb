@@ -183,6 +183,9 @@ impl Bridge {
             {
                 error!("Error serving HTTP connection: {}", http_err);
             }
+            if verbose {
+                debug!("Connection {} closed", client_num);
+            }
             Ok::<(), Error>(())
         });
     }
