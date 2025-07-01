@@ -162,6 +162,7 @@ impl Bridge {
             if let Err(http_err) = http1::Builder::new()
                 .title_case_headers(true)
                 .preserve_header_case(true)
+                .keep_alive(false)
                 .serve_connection(
                     stream,
                     service_fn(move |req| {
