@@ -553,8 +553,13 @@ pub(crate) async fn handle_request(
 
     let mut builder = Response::builder().status(status);
     for (h, val) in headers.iter() {
+        // Don't pass through the printer's Connection header. Force it to Connection: close below.
+        if h == header::CONNECTION {
+            continue;
+        }
         builder = builder.header(h, val);
     }
+    builder = builder.header(header::CONNECTION, "close");
 
     debug!("* Forwarding printer response body");
     let (mut sender, body) = Body::channel();
