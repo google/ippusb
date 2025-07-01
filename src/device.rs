@@ -273,7 +273,9 @@ impl InterfaceManager {
 
                         // If the device was unplugged, don't bother to print an error.  We're
                         // about to exit anyway.
-                        Err(Error::ReleaseInterface(_, rusb::Error::NoDevice)) => {}
+                        Err(Error::ReleaseInterface(_, rusb::Error::NoDevice)) => {
+                            break;
+                        }
 
                         // If this failed for some other reason, we're in some bad state.  There
                         // are no active interfaces, so restarting won't interrupt an active
