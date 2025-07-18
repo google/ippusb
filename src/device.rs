@@ -439,7 +439,24 @@ impl Device {
 
         let info = IppusbDeviceInfo::new(&handle.device())?;
 
-        set_device_config(handle.as_ref(), info.config)?;
+        if let Err(e) = set_device_config(handle.as_ref(), info.config) {
+            if let Error::SetActiveConfig(rusb::Error::Busy) = e {
+                let cur_config = handle
+                    .device()
+                    .active_config_descriptor()
+                    .map_err(Error::ReadConfigDescriptor)?;
+                if info.config == cur_config.number() {
+                    info!(
+                        "Configuration {} is already active.  Ignoring resource busy failure.",
+                        info.config
+                    );
+                } else {
+                    return Err(e);
+                }
+            } else {
+                return Err(e);
+            }
+        }
 
         // Open the IPP-USB interfaces.
         let mut connections = Vec::new();
