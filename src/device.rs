@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::collections::VecDeque;
+use std::cmp::{Ord, Ordering};
+use std::collections::BinaryHeap;
 use std::io::{self, Read, Write};
 
 #[cfg(target_os = "android")]
@@ -113,10 +114,39 @@ impl ClaimedInterface {
     }
 }
 
+impl Ord for ClaimedInterface {
+    /// Order claimed interfaces based purely on interface descriptors, but sorted in reverse
+    /// order.  This allows a BinaryHeap<ClaimedInterface> to always pick the lowest-numbered
+    /// interface.  The handle field is ignored because two IPP-USB interfaces on the same device
+    /// can't have the same interface number and alternate.  If ClaimedInterface values from
+    /// different devices are compared, the result is logically consistent, but not meaningful.
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.descriptor.cmp(&other.descriptor) {
+            Ordering::Less => Ordering::Greater,
+            Ordering::Greater => Ordering::Less,
+            Ordering::Equal => Ordering::Equal,
+        }
+    }
+}
+
+impl PartialOrd for ClaimedInterface {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for ClaimedInterface {
+    fn eq(&self, other: &Self) -> bool {
+        self.descriptor == other.descriptor && self.handle.device() == other.handle.device()
+    }
+}
+
+impl Eq for ClaimedInterface {}
+
 /// InterfaceManagerState contains the internal state of InterfaceManager.  It is intended to
 /// be shared across InterfaceManager instances and protected by a mutex.
 struct InterfaceManagerState {
-    interfaces: VecDeque<ClaimedInterface>,
+    interfaces: BinaryHeap<ClaimedInterface>,
     handle: Arc<rusb::DeviceHandle<Context>>,
     usb_config: u8,
     active: usize,
@@ -140,7 +170,9 @@ impl InterfaceManagerState {
             set_device_config(self.handle.as_ref(), self.usb_config)?;
         }
 
-        for interface in &mut self.interfaces {
+        let mut heap = BinaryHeap::with_capacity(self.interfaces.len());
+        let mut res = Ok(());
+        for mut interface in self.interfaces.drain() {
             if let Err(e) = interface.claim() {
                 // We don't bother to free any successfully claimed interfaces because
                 // it's not an error to try to claim them again when the next connection
@@ -149,19 +181,25 @@ impl InterfaceManagerState {
                     "Failed to reclaim interface {}: {}",
                     interface.descriptor.interface_number, e
                 );
-                return Err(e);
+                res = res.and(Err(e));
             }
+            // Every interface goes back into the heap regardless of success.
+            heap.push(interface);
         }
-        Ok(())
+        self.interfaces = heap;
+        res
     }
 
     /// Call release on all interfaces.  Return Ok if all calls succeeded, or the first Err if any
     /// call failed.
     fn release_all(&mut self) -> Result<()> {
         let mut res = Ok(());
-        for interface in &mut self.interfaces {
+        let mut heap = BinaryHeap::with_capacity(self.interfaces.len());
+        for mut interface in self.interfaces.drain() {
             res = res.and(interface.release());
+            heap.push(interface);
         }
+        self.interfaces = heap;
         res
     }
 }
@@ -208,21 +246,23 @@ impl InterfaceManager {
     fn new(
         handle: Arc<rusb::DeviceHandle<Context>>,
         usb_config: u8,
-        interfaces: Vec<ClaimedInterface>,
+        mut interfaces: Vec<ClaimedInterface>,
     ) -> Self {
-        let mut deque: VecDeque<ClaimedInterface> = interfaces.into();
-        for interface in &mut deque {
+        let mut heap: BinaryHeap<ClaimedInterface> = BinaryHeap::with_capacity(interfaces.len());
+        for mut interface in interfaces.drain(..) {
             interface.release().unwrap_or_else(|e| {
                 error!(
                     "Failed to release interface {}: {}",
                     interface.descriptor.interface_number, e
                 );
             });
+            // Every interface goes into the heap regardless of success.
+            heap.push(interface);
         }
         Self {
             interface_available: Arc::new(Condvar::new()),
             state: Arc::new(Mutex::new(InterfaceManagerState {
-                interfaces: deque,
+                interfaces: heap,
                 handle,
                 usb_config,
                 active: 0,
@@ -380,7 +420,7 @@ impl InterfaceManager {
         state.active += 1;
 
         loop {
-            if let Some(interface) = state.interfaces.pop_front() {
+            if let Some(interface) = state.interfaces.pop() {
                 debug!(
                     "* Using interface {}",
                     interface.descriptor.interface_number
@@ -399,7 +439,7 @@ impl InterfaceManager {
             interface.descriptor.interface_number
         );
         let mut state = self.state.lock().unwrap();
-        state.interfaces.push_back(interface);
+        state.interfaces.push(interface);
         state.next_cleanup = Instant::now() + USB_CLEANUP_TIMEOUT;
         state.pending_cleanup = true;
         state.active -= 1;

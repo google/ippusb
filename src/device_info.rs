@@ -43,7 +43,7 @@ pub fn device_supports_ippusb<T: UsbContext>(device: &rusb::Device<T>) -> Result
 /// The information for an interface descriptor that supports IPP-USB.
 ///
 /// Bulk transfers can be read/written to the in/out endpoints, respectively.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct IppusbDescriptor {
     pub interface_number: u8,
     pub alternate_setting: u8,
@@ -141,5 +141,48 @@ impl IppusbDeviceInfo {
         }
 
         Err(Error::NotIppUsb)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The IppusbDescriptor tests just restate what the generated Ord implementation will do.  They
+    // are useful to capture the expectation that interface_number and alternate_setting are the
+    // most important sort fields even if somebody reorders the struct members.
+
+    #[test]
+    fn compare_lowest_interface_first() {
+        let lhs = IppusbDescriptor {
+            interface_number: 1,
+            alternate_setting: 1,
+            in_endpoint: 1,
+            out_endpoint: 2,
+        };
+        let rhs = IppusbDescriptor {
+            interface_number: 0,
+            alternate_setting: 2,
+            in_endpoint: 3,
+            out_endpoint: 4,
+        };
+        assert!(rhs < lhs);
+    }
+
+    #[test]
+    fn compare_lowest_alternate_first() {
+        let lhs = IppusbDescriptor {
+            interface_number: 1,
+            alternate_setting: 2,
+            in_endpoint: 1,
+            out_endpoint: 2,
+        };
+        let rhs = IppusbDescriptor {
+            interface_number: 1,
+            alternate_setting: 1,
+            in_endpoint: 3,
+            out_endpoint: 4,
+        };
+        assert!(rhs < lhs);
     }
 }
