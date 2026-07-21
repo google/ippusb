@@ -408,7 +408,7 @@ impl InterfaceManager {
     /// Will block until an interface is available.
     /// If interfaces are currently not claimed, will first set the active device
     /// configuration and re-claim USB interfaces.
-    fn request_interface(&mut self) -> Result<ClaimedInterface> {
+    fn request_interface(&self) -> Result<ClaimedInterface> {
         let mut state = self.state.lock().unwrap();
 
         if state.active == 0 && !state.pending_cleanup {
@@ -432,7 +432,7 @@ impl InterfaceManager {
     }
 
     /// Return an interface to the pool of interfaces.
-    fn free_interface(&mut self, interface: ClaimedInterface) {
+    fn free_interface(&self, interface: ClaimedInterface) {
         debug!(
             "* Returning interface {}",
             interface.descriptor.interface_number
@@ -532,7 +532,7 @@ impl Device {
     ///
     /// The returned interface can be used for I/O with the USB device.  Returns an error if no
     /// IPP-USB interfaces are currently available or if claiming the interface fails.
-    pub fn get_connection(&mut self) -> Result<Connection> {
+    pub fn get_connection(&self) -> Result<Connection> {
         let interface = self.manager.request_interface()?;
         Ok(Connection::new(
             self.verbose_log,
