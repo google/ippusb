@@ -11,7 +11,9 @@ repository = "https://github.com/google/ippusb"
 [dependencies]
 chunked_transfer = "1"
 httparse = "1.3.4"
-hyper = { version = "0.14", features = ["http1", "server", "runtime", "tcp", "backports", "deprecated"]}
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"]}
+hyper-util = { version = "0.1", features = ["tokio"] }
 log = "0.4"
 rusb = "0.9.4"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal"] }
