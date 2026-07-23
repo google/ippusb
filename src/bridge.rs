@@ -54,7 +54,7 @@ impl Bridge {
     /// called.
     ///
     /// * `verbose_log`: If true, log HTTP headers, additional info about HTTP bodies, and progress
-    ///    messages.
+    ///   messages.
     /// * `shutdown`: When this receives a value, stop processing new connections.
     /// * `listener`: A listening TCP socket for new incoming connections.
     /// * `usb`: An open device that supports IPP-USB.
