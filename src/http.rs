@@ -120,8 +120,7 @@ where
                 for header in headers.iter().take_while(|&&h| h != httparse::EMPTY_HEADER) {
                     let name = HeaderName::from_bytes(header.name.as_bytes());
                     let val = HeaderValue::from_bytes(header.value);
-                    if name.is_ok() && val.is_ok() {
-                        let val = val.unwrap();
+                    if let (Ok(name), Ok(val)) = (name, val) {
                         if self.verbose_log {
                             debug!(
                                 "<  {}: {}",
@@ -129,7 +128,7 @@ where
                                 val.to_str().unwrap_or("Binary data")
                             );
                         }
-                        parsed_headers.append(name.unwrap(), val);
+                        parsed_headers.append(name, val);
                     } else {
                         error!(
                             "Ignoring malformed header {}:{:#?}",

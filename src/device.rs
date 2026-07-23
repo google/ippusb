@@ -385,8 +385,7 @@ impl InterfaceManager {
         if let Some(handle) = cleanup_thread {
             let tid = handle.thread().id();
             handle.join().map_err(|_| {
-                Error::CleanupThread(io::Error::new(
-                    io::ErrorKind::Other,
+                Error::CleanupThread(io::Error::other(
                     "Failed to join cleanup thread",
                 ))
             })?;
