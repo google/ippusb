@@ -4,7 +4,7 @@
 
 use std::convert::Infallible;
 
-use http_body_util::{combinators::BoxBody, BodyExt, Empty};
+use http_body_util::{BodyExt, Empty};
 use hyper::body::Bytes;
 use hyper::http::StatusCode;
 use hyper::server::conn::http1;
@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 
 use crate::device::{Connection, Device};
 use crate::error::Error;
-use crate::http::handle_request;
+use crate::http::{handle_request, ResponseBody};
 
 /// Reason for shutting down the proxy.
 ///
@@ -131,9 +131,9 @@ impl Bridge {
         usb: Option<Connection>,
         request: Request<hyper::body::Incoming>,
         handle: AsyncHandle,
-    ) -> std::result::Result<Response<BoxBody<Bytes, Infallible>>, Infallible> {
+    ) -> std::result::Result<Response<ResponseBody>, Infallible> {
         if usb.is_none() {
-            let body: Empty<Bytes> = Empty::new();
+            let body = Empty::<Bytes>::new().map_err(|e| match e {});
             return Ok(Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(body.boxed())
@@ -145,7 +145,7 @@ impl Bridge {
             .await
             .or_else(|err| {
                 error!("Request failed: {}", err);
-                let body: Empty<Bytes> = Empty::new();
+                let body = Empty::<Bytes>::new().map_err(|e| match e {});
                 Ok(Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .body(body.boxed())

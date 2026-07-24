@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::convert::Infallible;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::pin::Pin;
@@ -64,6 +63,8 @@ impl fmt::Display for Error {
 }
 
 type Result<T> = std::result::Result<T, Error>;
+pub(crate) type ResponseBody = BoxBody<Bytes, Error>;
+type BodyFrameResult = Result<Frame<Bytes>>;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum BodyLength {
@@ -355,12 +356,12 @@ fn serialize_request_header(
 /// An adapter that implements `hyper::body::Body` over a Tokio MPSC receiver yielding body frames
 /// produced by synchronous USB read tasks.
 struct ResponseBodyStream {
-    rx: Receiver<std::result::Result<Frame<Bytes>, Infallible>>,
+    rx: Receiver<BodyFrameResult>,
 }
 
 impl hyper::body::Body for ResponseBodyStream {
     type Data = Bytes;
-    type Error = Infallible;
+    type Error = Error;
 
     fn poll_frame(
         mut self: Pin<&mut Self>,
@@ -374,7 +375,7 @@ impl hyper::body::Body for ResponseBodyStream {
 // `sender`.
 fn copy_response_body<R: BufRead + Sized>(
     mut response_reader: ResponseReader<R>,
-    sender: &mpsc::Sender<std::result::Result<Frame<Bytes>, Infallible>>,
+    sender: &mpsc::Sender<BodyFrameResult>,
 ) -> Result<usize> {
     let mut reader = match response_reader.body_reader() {
         Ok(r) => r,
@@ -464,7 +465,7 @@ pub(crate) async fn handle_request(
     mut usb: Connection,
     request: hyper::Request<Incoming>,
     handle: AsyncHandle,
-) -> Result<Response<BoxBody<Bytes, Infallible>>> {
+) -> Result<Response<ResponseBody>> {
     info!(
         "Request: {} {} {:?}",
         request.method(),
@@ -574,14 +575,14 @@ pub(crate) async fn handle_request(
     builder = builder.header(header::CONNECTION, "close");
 
     debug!("* Forwarding printer response body");
-    let (tx, rx) = mpsc::channel::<std::result::Result<Frame<Bytes>, Infallible>>(2);
+    let (tx, rx) = mpsc::channel::<BodyFrameResult>(2);
     let body = ResponseBodyStream { rx }.boxed();
     handle.spawn_blocking(
         move || match copy_response_body(response_reader, &tx) {
             Ok(num) => debug!("Copied {} bytes of response body", num),
             Err(err) => {
                 error!("Failed to copy response body: {}", err);
-                drop(tx);
+                let _ = tx.blocking_send(Err(err));
             }
         },
     );
@@ -886,7 +887,7 @@ Content-Type: text/plain\r
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers.len(), 0);
 
-        let (tx, rx) = mpsc::channel::<std::result::Result<Frame<Bytes>, Infallible>>(2);
+        let (tx, rx) = mpsc::channel::<BodyFrameResult>(2);
         let body = ResponseBodyStream { rx };
         let bytes_task = tokio::spawn(async move { body.collect().await.unwrap().to_bytes() });
 
@@ -920,7 +921,7 @@ Content-Type: text/plain\r
             "8"
         );
 
-        let (tx, rx) = mpsc::channel::<std::result::Result<Frame<Bytes>, Infallible>>(2);
+        let (tx, rx) = mpsc::channel::<BodyFrameResult>(2);
         let body = ResponseBodyStream { rx };
         let bytes_task = tokio::spawn(async move { body.collect().await.unwrap().to_bytes() });
 
@@ -963,7 +964,7 @@ body\r
             "chunked"
         );
 
-        let (tx, rx) = mpsc::channel::<std::result::Result<Frame<Bytes>, Infallible>>(2);
+        let (tx, rx) = mpsc::channel::<BodyFrameResult>(2);
         let body = ResponseBodyStream { rx };
         let bytes_task = tokio::spawn(async move { body.collect().await.unwrap().to_bytes() });
 
