@@ -132,14 +132,13 @@ impl Bridge {
         request: Request<hyper::body::Incoming>,
         handle: AsyncHandle,
     ) -> std::result::Result<Response<ResponseBody>, Infallible> {
-        if usb.is_none() {
+        let Some(usb) = usb else {
             let body = Empty::<Bytes>::new().map_err(|e| match e {});
             return Ok(Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(body.boxed())
                 .unwrap());
-        }
-        let usb = usb.unwrap();
+        };
 
         handle_request(verbose, usb, request, handle)
             .await
