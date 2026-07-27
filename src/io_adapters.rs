@@ -184,7 +184,7 @@ where
 
     fn flush(&mut self) -> io::Result<()> {
         self.writer.write_all(&self.buf)?;
-        self.buf.truncate(0);
+        self.buf.clear();
         Ok(())
     }
 }
